@@ -389,6 +389,18 @@ let authError = '';
 let athleteDirectoryCache = null;
 let selectedLoginAthlete = null;
 
+window.goAuthView = function(view){
+  authView = view;
+  authError = '';
+  if(view !== 'athleteLogin') selectedLoginAthlete = null;
+  renderAuthScreen();
+};
+window.backToAthletePicker = function(){
+  selectedLoginAthlete = null;
+  authError = '';
+  renderAuthScreen();
+};
+
 function showAuthScreen(){
   document.getElementById('authScreen').style.display = 'flex';
   document.getElementById('appShell').style.display = 'none';
@@ -411,13 +423,13 @@ function renderAuthScreen(){
         <div class="wave" style="font-size:36px;text-align:center;">〜</div>
         <h1>Mi Equipo</h1>
         <p class="hint" style="text-align:center;margin-bottom:22px;">Natación sincronizada</p>
-        <button class="btn" style="width:100%;margin-bottom:10px;justify-content:center;" onclick="authView='adminLogin'; authError=''; renderAuthScreen();">Soy entrenadora</button>
-        <button class="btn secondary" style="width:100%;justify-content:center;" onclick="authView='athleteLogin'; authError=''; selectedLoginAthlete=null; renderAuthScreen();">Soy atleta</button>
+        <button class="btn" style="width:100%;margin-bottom:10px;justify-content:center;" onclick="goAuthView('adminLogin')">Soy entrenadora</button>
+        <button class="btn secondary" style="width:100%;justify-content:center;" onclick="goAuthView('athleteLogin')">Soy atleta</button>
       </div>`;
   }else if(authView==='adminLogin'){
     el.innerHTML = `
       <div class="auth-card">
-        <button class="btn small secondary" onclick="authView='role'; renderAuthScreen();">← Volver</button>
+        <button class="btn small secondary" onclick="goAuthView('role')">← Volver</button>
         <h2 style="margin-top:16px;">Entrenadora</h2>
         <div class="field" style="margin-top:10px;"><label>Email</label><input id="authEmail" type="email"></div>
         <div class="field" style="margin-top:10px;"><label>Contraseña</label><input id="authPass" type="password" onkeydown="if(event.key==='Enter') adminLogin();"></div>
@@ -450,7 +462,7 @@ async function renderAthleteLoginScreen(){
     `).join('') || `<p class="hint">Todavía no hay atletas cargadas.</p>`;
     el.innerHTML = `
       <div class="auth-card auth-card-wide">
-        <button class="btn small secondary" onclick="authView='role'; renderAuthScreen();">← Volver</button>
+        <button class="btn small secondary" onclick="goAuthView('role')">← Volver</button>
         <h2 style="margin-top:16px;">¿Quién eres?</h2>
         <p class="hint">Tocá tu nombre.</p>
         <div class="athlete-pick-grid">${cards}</div>
@@ -458,7 +470,7 @@ async function renderAthleteLoginScreen(){
   }else{
     el.innerHTML = `
       <div class="auth-card">
-        <button class="btn small secondary" onclick="selectedLoginAthlete=null; authError=''; renderAuthScreen();">← Volver</button>
+        <button class="btn small secondary" onclick="backToAthletePicker()">← Volver</button>
         <h2 style="margin-top:16px;">Hola, ${escapeHtml(selectedLoginAthlete.name.split(' ')[0])} 👋</h2>
         <p class="hint">Ingresá tu PIN de 6 dígitos.</p>
         <input id="athletePinInput" type="tel" maxlength="6" inputmode="numeric" autofocus
@@ -784,6 +796,10 @@ let attMonthFilter = new Date().toISOString().slice(0,7);
 let asistSelectedDate = new Date().toISOString().slice(0,10);
 let asistCategoryFilter = 'Todas';
 
+window.setAsistDate = function(d){ asistSelectedDate = d; render(); };
+window.setAsistCategoryFilter = function(v){ asistCategoryFilter = v; render(); };
+window.setAttMonthFilter = function(v){ attMonthFilter = v; render(); };
+
 const ATTENDANCE_STATUSES = {
   presente: {label:'Asistió',    bg:'#E4EEE6', fg:'#2E5A3B'},
   ausente:  {label:'No asistió', bg:'#F7E2DD', fg:'#8C3427'},
@@ -833,7 +849,7 @@ function viewAsistencia(){
     return `<div class="test-row">
       <span class="test-name">${formatDateShort(d)}</span>
       <span class="hint">${count} marca(s)</span>
-      <button class="btn small secondary" onclick="asistSelectedDate='${d}'; render();">Ir</button>
+      <button class="btn small secondary" onclick="setAsistDate('${d}')">Ir</button>
       <button class="btn small danger" onclick="deleteAttendanceDate('${d}')">Eliminar fecha</button>
     </div>`;
   }).join('') || `<div class="empty-state">Todavía no marcaste asistencia en ninguna fecha.</div>`;
@@ -845,9 +861,9 @@ function viewAsistencia(){
       <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:14px;">
         <div class="row">
           <div class="field"><label>Categoría</label>
-            <select onchange="asistCategoryFilter=this.value; render();">${categories.map(c=>`<option ${c===asistCategoryFilter?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select>
+            <select onchange="setAsistCategoryFilter(this.value)">${categories.map(c=>`<option ${c===asistCategoryFilter?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>Fecha</label><input type="date" value="${asistSelectedDate}" onchange="asistSelectedDate=this.value; render();"></div>
+          <div class="field"><label>Fecha</label><input type="date" value="${asistSelectedDate}" onchange="setAsistDate(this.value)"></div>
         </div>
         <div style="font-weight:700;align-self:flex-end;">${markedCount} de ${filtered.length} marcados</div>
       </div>
@@ -859,7 +875,7 @@ function viewAsistencia(){
     <div class="panel">
       <div class="row" style="justify-content:space-between;margin-bottom:14px;">
         <h3 style="margin:0;">% de asistencia</h3>
-        <div class="field" style="min-width:180px;"><label>Mes de referencia</label><select onchange="attMonthFilter=this.value; render();">${monthOptions}</select></div>
+        <div class="field" style="min-width:180px;"><label>Mes de referencia</label><select onchange="setAttMonthFilter(this.value)">${monthOptions}</select></div>
       </div>
       <table><thead><tr><th>Atleta</th><th>% mensual (${formatMonthLabel(attMonthFilter)})</th><th>% anual (${attMonthFilter.slice(0,4)})</th></tr></thead><tbody>${summary}</tbody></table>
     </div>
@@ -908,6 +924,7 @@ window.deleteAttendanceDate = async function(date){
    CONTROL FÍSICO
    ============================================================ */
 let fisicoSelectedAthlete = null;
+window.setFisicoSelectedAthlete = function(v){ fisicoSelectedAthlete = v; render(); };
 let fisicoView = 'list';
 let fisicoActiveGroup = undefined;
 const UNGROUPED_KEY = '__sin_agrupar__';
@@ -1008,7 +1025,7 @@ function renderFisicoGroupDetail(){
     <div class="panel">
       <div class="row" style="justify-content:space-between;margin-bottom:6px;">
         <h3 style="margin:0;">Progreso individual</h3>
-        <div class="row"><select class="athlete-select" onchange="fisicoSelectedAthlete=this.value; render();">${athleteOptions}</select><button class="btn secondary" onclick="printReport('${key}')">🖨 Imprimir / enviar reporte</button></div>
+        <div class="row"><select class="athlete-select" onchange="setFisicoSelectedAthlete(this.value)">${athleteOptions}</select><button class="btn secondary" onclick="printReport('${key}')">🖨 Imprimir / enviar reporte</button></div>
       </div>
       <div id="fisicoCharts">${chartsHtml}</div>
     </div>
