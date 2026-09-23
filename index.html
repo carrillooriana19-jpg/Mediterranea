@@ -1003,7 +1003,7 @@ function renderFisicoGroupDetail(){
 
   const athleteOptions = state.athletes.map(a=>`<option value="${a.id}" ${a.id===fisicoSelectedAthlete?'selected':''}>${escapeHtml(a.name)}</option>`).join('');
   const chartsHtml = tests.length===0 ? `<div class="empty-state">Agregá al menos un ejercicio para poder registrar resultados.</div>`
-    : tests.map(t => renderTestChart(fisicoSelectedAthlete, t)).join('');
+    : tests.map(t => renderTestChart(fisicoSelectedAthlete, t, true)).join('');
   const groupBtns = isReal ? `<button class="btn small secondary" onclick="editTestGroup('${groupId}')">Renombrar</button><button class="btn small danger" onclick="deleteTestGroup('${groupId}')">Eliminar prueba</button>` : '';
 
   return `
@@ -1267,12 +1267,13 @@ window.newTestResultsBatch = function(groupKey){
 };
 
 /* ---- Gráficos de progreso (funciones puras) ---- */
-function renderTestChart(athleteId, testDef){
+function renderTestChart(athleteId, testDef, editable){
   const points = state.testResults.filter(r=>r.athleteId===athleteId && r.testId===testDef.id).sort((a,b)=>a.date.localeCompare(b.date));
   const titleHtml = `<div class="chart-title"><span class="color-dot" style="background:${colorHex(testDef.color)};display:inline-block;margin-right:6px;"></span>${escapeHtml(testDef.name)} <span class="tag">${testDef.location==='agua'?'Agua':'Seco'}</span></div>`;
-  if(points.length===0) return `<div class="chart-wrap">${titleHtml}<div class="hint">Sin registros todavía.</div>${renderPhotoComparison(points, testDef)}</div>`;
-  if(testDef.type==='passfail') return renderPassFailTimeline(points, testDef, titleHtml);
-  if(testDef.type==='scoretime') return renderScoreTimeCharts(points, testDef, titleHtml);
+  const resultsList = editable ? renderResultsTable(points, testDef) : '';
+  if(points.length===0) return `<div class="chart-wrap">${titleHtml}<div class="hint">Sin registros todavía.</div>${renderPhotoComparison(points, testDef)}${resultsList}</div>`;
+  if(testDef.type==='passfail') return renderPassFailTimeline(points, testDef, titleHtml) + resultsList;
+  if(testDef.type==='scoretime') return renderScoreTimeCharts(points, testDef, titleHtml) + resultsList;
 
   let deltaHtml='';
   const valPoints = points.filter(p=>p.value!==undefined);
@@ -1284,8 +1285,126 @@ function renderTestChart(athleteId, testDef){
   }
   const svg = valPoints.length ? lineChartSVG(valPoints, testDef) : `<div class="hint">Sin valores numéricos todavía.</div>`;
   const jumpHtml = testDef.isJumpTest && valPoints.length ? renderJumpPercent(athleteId, valPoints) : '';
-  return `<div class="chart-wrap">${titleHtml}<div>${deltaHtml}</div>${svg}${jumpHtml}${renderPhotoComparison(points, testDef)}</div>`;
+  return `<div class="chart-wrap">${titleHtml}<div>${deltaHtml}</div>${svg}${jumpHtml}${renderPhotoComparison(points, testDef)}${resultsList}</div>`;
 }
+
+function renderResultsTable(points, testDef){
+  if(points.length===0) return '';
+  const rows = points.slice().reverse().map(p=>{
+    let valueText;
+    if(testDef.type==='passfail'){
+      valueText = p.value===1 ? 'Apto' : 'No apto';
+    }else if(testDef.type==='scoretime'){
+      const parts=[];
+      if(p.value!==undefined && p.value!==null) parts.push(`${p.value}${testDef.scoreUnit?' '+testDef.scoreUnit:''} (punt.)`);
+      if(p.value2!==undefined && p.value2!==null) parts.push(`${p.value2}${testDef.timeUnit?' '+testDef.timeUnit:''} (tiempo)`);
+      valueText = parts.join(' · ') || '—';
+    }else{
+      valueText = (p.value!==undefined && p.value!==null) ? `${p.value}${testDef.unit?' '+testDef.unit:''}` : '—';
+    }
+    return `<div class="test-row">
+      <span class="hint" style="min-width:70px;">${formatDateShort(p.date)}</span>
+      <span class="test-name">${escapeHtml(valueText)}</span>
+      ${p.photoUrl?'<span class="tag">📷</span>':''}
+      <button class="btn small secondary" onclick="editTestResult('${p.id}')">Editar</button>
+      <button class="btn small danger" onclick="deleteTestResult('${p.id}')">Eliminar</button>
+    </div>`;
+  }).join('');
+  return `<details class="no-print" style="margin-top:10px;"><summary class="hint" style="cursor:pointer;font-weight:700;">Ver / editar registros (${points.length})</summary><div style="margin-top:6px;">${rows}</div></details>`;
+}
+
+let pendingEditResultPhoto = null;
+let pendingEditResultPhotoChanged = false;
+
+window.handleEditResultPhotoUpload = function(input){
+  const file = input.files[0];
+  if(!file) return;
+  readAndResizeImage(file, 480, 0.6, (dataURL) => {
+    pendingEditResultPhoto = dataURL;
+    pendingEditResultPhotoChanged = true;
+    document.getElementById('editResultPhotoPreview').innerHTML = `<img src="${dataURL}" class="compare-img" style="margin-top:8px;"><br><button type="button" class="btn small danger" style="margin-top:6px;" onclick="clearEditResultPhoto()">Quitar foto</button>`;
+  });
+};
+window.clearEditResultPhoto = function(){
+  pendingEditResultPhoto = null;
+  pendingEditResultPhotoChanged = true;
+  document.getElementById('editResultPhotoPreview').innerHTML = '';
+};
+
+window.editTestResult = function(resultId){
+  const r = state.testResults.find(x=>x.id===resultId);
+  if(!r) return;
+  const t = state.testDefs.find(x=>x.id===r.testId);
+  if(!t) return;
+  pendingEditResultPhoto = null;
+  pendingEditResultPhotoChanged = false;
+
+  let fieldsHtml;
+  if(t.type==='passfail'){
+    fieldsHtml = `<div class="field"><label>Resultado</label>
+      <select id="f_val">
+        <option value="1" ${r.value===1?'selected':''}>Apto</option>
+        <option value="0" ${r.value===0?'selected':''}>No apto</option>
+      </select>
+    </div>`;
+  }else if(t.type==='scoretime'){
+    fieldsHtml = `
+      <div class="field"><label>Puntuación ${t.scoreUnit?`(${escapeHtml(t.scoreUnit)})`:''}</label><input id="f_score" type="number" step="any" value="${r.value??''}"></div>
+      <div class="field"><label>Tiempo ${t.timeUnit?`(${escapeHtml(t.timeUnit)})`:''}</label><input id="f_time" type="number" step="any" value="${r.value2??''}"></div>
+    `;
+  }else{
+    fieldsHtml = `<div class="field"><label>Valor ${t.unit?`(${escapeHtml(t.unit)})`:''}</label><input id="f_val" type="number" step="any" value="${r.value??''}"></div>`;
+  }
+
+  const photoField = t.allowPhoto ? `
+    <div class="field"><label>Foto</label>
+      <input type="file" accept="image/*" onchange="handleEditResultPhotoUpload(this)">
+      <div id="editResultPhotoPreview">${r.photoUrl?`<img src="${r.photoUrl}" class="compare-img" style="margin-top:8px;"><br><button type="button" class="btn small danger" style="margin-top:6px;" onclick="clearEditResultPhoto()">Quitar foto</button>`:''}</div>
+    </div>
+  ` : '';
+
+  openDialog('Editar resultado', `
+    <div class="field"><label>Fecha</label><input id="f_date" type="date" value="${r.date}"></div>
+    ${fieldsHtml}
+    ${photoField}
+  `, async () => {
+    const date = document.getElementById('f_date').value;
+    if(!date){ alert('Elegí una fecha.'); return; }
+    const update = {date};
+    if(t.type==='passfail'){
+      update.value = parseInt(document.getElementById('f_val').value);
+    }else if(t.type==='scoretime'){
+      const scoreRaw = document.getElementById('f_score').value;
+      const timeRaw = document.getElementById('f_time').value;
+      if(scoreRaw!==''){ const v=parseFloat(scoreRaw); if(!isNaN(v)) update.value = v; }
+      if(timeRaw!==''){ const v2=parseFloat(timeRaw); if(!isNaN(v2)) update.value2 = v2; }
+    }else{
+      const raw = document.getElementById('f_val').value;
+      if(raw===''){ alert('Ingresá un valor.'); return; }
+      const v = parseFloat(raw);
+      if(isNaN(v)){ alert('El valor no es válido.'); return; }
+      update.value = v;
+    }
+    if(pendingEditResultPhotoChanged){
+      update.photoUrl = pendingEditResultPhoto || null;
+    }
+    closeDialog(); showBusy('Guardando...');
+    try{
+      await updateDoc(doc(db,'testResults',resultId), update);
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
+window.deleteTestResult = async function(resultId){
+  if(!confirm('¿Eliminar este resultado? No se puede deshacer.')) return;
+  showBusy('Eliminando...');
+  try{
+    await deleteDoc(doc(db,'testResults',resultId));
+  }catch(e){ alert('Error: '+e.message); }
+  hideBusy();
+};
+
 function renderJumpPercent(athleteId, points){
   const athlete = state.athletes.find(a=>a.id===athleteId);
   if(!athlete || !athlete.height) return `<div class="hint">Cargá la estatura de esta atleta en "Atletas" para ver el % de salto.</div>`;
