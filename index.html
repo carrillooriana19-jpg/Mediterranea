@@ -213,6 +213,24 @@
   .photo-compare-title{font-weight:700;font-size:12.5px;margin-bottom:8px;}
   .compare-img{width:140px;height:140px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;}
   .compare-img-empty{width:140px;height:140px;border-radius:8px;border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;text-align:center;font-size:11px;color:#7C8C8C;padding:8px;box-sizing:border-box;}
+  .cal-nav-label{margin:0;min-width:130px;text-align:center;text-transform:capitalize;}
+  .cal-grid-head{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;}
+  .cal-daylabel{text-align:center;font-size:11px;font-weight:700;color:#7C8C8C;text-transform:uppercase;}
+  .cal-grid-body{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+  .cal-cell{border:1px solid var(--line);border-radius:var(--radius);min-height:56px;padding:6px;background:var(--white);}
+  .cal-cell-empty{border-color:transparent;background:transparent;}
+  .cal-cell-today .cal-daynum{color:var(--teal);}
+  .cal-cell-today{box-shadow:inset 0 0 0 1.5px var(--teal);}
+  .cal-cell-selected{background:var(--teal-light);}
+  .cal-daynum{font-size:12px;font-weight:700;}
+  .cal-dots{display:flex;gap:3px;flex-wrap:wrap;margin-top:5px;}
+  .cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 auto;}
+  .cal-event-detail{padding:10px 0;border-bottom:1px solid var(--line);}
+  .cal-event-detail:last-child{border-bottom:none;}
+  @media (max-width:640px){
+    .cal-cell{min-height:40px;padding:4px;}
+    .cal-daylabel{font-size:9px;}
+  }
   @media print{
     .rail,.no-print{display:none !important;}
     main{padding:0;max-width:100%;}
@@ -271,7 +289,7 @@
   <div class="dialog-head" id="dialogTitle"></div>
   <div class="dialog-body" id="dialogBody"></div>
   <div class="dialog-foot">
-    <button class="btn secondary" onclick="closeDialog()">Cancelar</button>
+    <button class="btn secondary" id="dialogCancel" onclick="closeDialog()">Cancelar</button>
     <button class="btn" id="dialogSave">Guardar</button>
   </div>
 </dialog>
@@ -312,7 +330,7 @@ let currentRole = null; // 'admin' | 'athlete'
 let currentAthleteId = null;
 let unsubscribers = [];
 
-let state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[] };
+let state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[] };
 
 function uid(){ return 'id_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
 
@@ -375,11 +393,16 @@ function readAndResizeImage(file, maxDim, quality, callback){
 
 /* ============ DIALOGO GENÉRICO ============ */
 function openDialog(title, bodyHtml, onSave, opts){
+  opts = opts || {};
   document.getElementById('dialogTitle').textContent = title;
   document.getElementById('dialogBody').innerHTML = bodyHtml;
-  document.getElementById('dialogSave').onclick = () => { onSave(); };
+  const saveBtn = document.getElementById('dialogSave');
+  saveBtn.style.display = opts.hideSave ? 'none' : '';
+  saveBtn.onclick = () => { onSave(); };
+  const cancelBtn = document.getElementById('dialogCancel');
+  cancelBtn.textContent = opts.cancelLabel || (opts.hideSave ? 'Cerrar' : 'Cancelar');
   const dlg = document.getElementById('dialog');
-  dlg.classList.toggle('wide', !!(opts && opts.wide));
+  dlg.classList.toggle('wide', !!opts.wide);
   dlg.showModal();
 }
 function closeDialog(){ document.getElementById('dialog').close(); }
@@ -551,7 +574,7 @@ onAuthStateChanged(auth, async (user) => {
 function stopListeners(){
   unsubscribers.forEach(u=>u());
   unsubscribers = [];
-  state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[] };
+  state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[] };
 }
 
 function startAdminListeners(){
@@ -573,6 +596,10 @@ function startAdminListeners(){
   }));
   unsubscribers.push(onSnapshot(collection(db,'testResults'), snap=>{
     state.testResults = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
+  unsubscribers.push(onSnapshot(collection(db,'events'), snap=>{
+    state.events = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
 }
@@ -599,6 +626,10 @@ function startAthleteListeners(){
     state.testResults = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(onSnapshot(collection(db,'events'), snap=>{
+    state.events = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
 }
 
 /* ============================================================
@@ -608,6 +639,7 @@ const TABS = [
   {id:'inicio', label:'Inicio', icon:'⌂'},
   {id:'atletas', label:'Atletas', icon:'●'},
   {id:'asistencia', label:'Asistencia', icon:'◐'},
+  {id:'calendario', label:'Calendario', icon:'▦'},
   {id:'fisico', label:'Control físico', icon:'◈'},
 ];
 let activeTab = 'inicio';
@@ -635,6 +667,7 @@ function render(){
   if(activeTab==='inicio') main.innerHTML = viewInicio();
   if(activeTab==='atletas') main.innerHTML = viewAtletas();
   if(activeTab==='asistencia') main.innerHTML = viewAsistencia();
+  if(activeTab==='calendario') main.innerHTML = viewCalendario();
   if(activeTab==='fisico') main.innerHTML = viewFisico();
   afterRender();
 }
@@ -921,6 +954,185 @@ window.deleteAttendanceDate = async function(date){
   showBusy('Eliminando...');
   const toDelete = state.attendance.filter(r=>r.date===date);
   for(const r of toDelete) await deleteDoc(doc(db,'attendance',r.id));
+  hideBusy();
+};
+
+/* ============================================================
+   CALENDARIO
+   ============================================================ */
+let calMonth = null;
+let calSelectedDate = null;
+const MESES_LARGOS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+function currentMonthStr(){ return new Date().toISOString().slice(0,7); }
+function shiftMonth(monthStr, delta){
+  let [y,m] = monthStr.split('-').map(Number);
+  m += delta;
+  while(m<1){ m+=12; y--; }
+  while(m>12){ m-=12; y++; }
+  return `${y}-${String(m).padStart(2,'0')}`;
+}
+function formatMonthLabelLong(monthStr){
+  const [y,m] = monthStr.split('-');
+  return `${MESES_LARGOS[parseInt(m,10)-1]} ${y}`;
+}
+function monthCells(monthStr){
+  const [y,m] = monthStr.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const firstWeekday = new Date(y, m-1, 1).getDay(); // 0=domingo
+  const leading = (firstWeekday+6)%7; // arranca en lunes
+  const cells = [];
+  for(let i=0;i<leading;i++) cells.push(null);
+  for(let d=1; d<=daysInMonth; d++) cells.push(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+  while(cells.length%7!==0) cells.push(null);
+  return cells;
+}
+function eventsInMonth(monthStr){
+  return state.events.filter(e=>e.date.slice(0,7)===monthStr)
+    .sort((a,b)=> a.date===b.date ? (a.time||'').localeCompare(b.time||'') : a.date.localeCompare(b.date));
+}
+function upcomingEvents(limit){
+  const today = new Date().toISOString().slice(0,10);
+  return state.events.filter(e=>e.date>=today)
+    .sort((a,b)=> a.date===b.date ? (a.time||'').localeCompare(b.time||'') : a.date.localeCompare(b.date))
+    .slice(0, limit||10);
+}
+function renderCalendarGrid(monthStr, opts){
+  opts = opts||{};
+  const editable = !!opts.editable;
+  const cells = monthCells(monthStr);
+  const todayStr = new Date().toISOString().slice(0,10);
+  const dayLabels = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+  const head = dayLabels.map(d=>`<div class="cal-daylabel">${d}</div>`).join('');
+  const body = cells.map(dateStr=>{
+    if(!dateStr) return `<div class="cal-cell cal-cell-empty"></div>`;
+    const dayEvents = state.events.filter(e=>e.date===dateStr);
+    const dots = dayEvents.slice(0,4).map(e=>`<span class="cal-dot" style="background:${colorHex(e.color||'blue')};"></span>`).join('');
+    const dayNum = parseInt(dateStr.slice(8,10),10);
+    const isToday = dateStr===todayStr;
+    const isSelected = editable && dateStr===calSelectedDate;
+    const clickable = editable || dayEvents.length>0;
+    const clickAttr = editable ? `onclick="setCalSelectedDate('${dateStr}')"` : (dayEvents.length ? `onclick="openDayEvents('${dateStr}')"` : '');
+    return `<div class="cal-cell ${isToday?'cal-cell-today':''} ${isSelected?'cal-cell-selected':''}" ${clickAttr} style="${clickable?'cursor:pointer;':''}">
+      <div class="cal-daynum">${dayNum}</div>
+      <div class="cal-dots">${dots}</div>
+    </div>`;
+  }).join('');
+  return `<div class="cal-grid-head">${head}</div><div class="cal-grid-body">${body}</div>`;
+}
+function eventRowHtml(e, editable){
+  return `<div class="test-row">
+    <span class="color-dot" style="background:${colorHex(e.color||'blue')};"></span>
+    <span class="test-name">${formatDateShort(e.date)}${e.time?` · ${escapeHtml(e.time)}`:''} — ${escapeHtml(e.title)}</span>
+    ${e.description?`<span class="hint">${escapeHtml(e.description)}</span>`:''}
+    ${editable?`<button class="btn small secondary" onclick="editEvent('${e.id}')">Editar</button><button class="btn small danger" onclick="deleteEvent('${e.id}')">Eliminar</button>`:''}
+  </div>`;
+}
+
+function viewCalendario(){
+  if(!calMonth) calMonth = currentMonthStr();
+  if(!calSelectedDate) calSelectedDate = new Date().toISOString().slice(0,10);
+  const monthEvents = eventsInMonth(calMonth);
+  const grid = renderCalendarGrid(calMonth, {editable:true});
+  const selDayEvents = state.events.filter(e=>e.date===calSelectedDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+  const dayRows = selDayEvents.map(e=>eventRowHtml(e,true)).join('') || `<div class="test-row"><span class="hint">No hay eventos este día.</span></div>`;
+  const monthListRows = monthEvents.map(e=>eventRowHtml(e,true)).join('') || `<div class="empty-state">No hay eventos cargados este mes.</div>`;
+
+  return `
+    <h2 class="page-title">Calendario</h2>
+    <p class="page-sub">Agregá torneos, presentaciones, charlas o cualquier evento del mes. Tus atletas lo ven desde su perfil.</p>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+        <div class="row">
+          <button class="btn small secondary" onclick="setCalMonth(-1)">←</button>
+          <h3 class="cal-nav-label">${formatMonthLabelLong(calMonth)}</h3>
+          <button class="btn small secondary" onclick="setCalMonth(1)">→</button>
+        </div>
+        <button class="btn" onclick="newEvent('${calSelectedDate}')">+ Agregar evento</button>
+      </div>
+      ${grid}
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">${formatDateShort(calSelectedDate)} · eventos de ese día</h3>
+      ${dayRows}
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Todos los eventos de ${formatMonthLabelLong(calMonth)}</h3>
+      ${monthListRows}
+    </div>
+  `;
+}
+
+window.setCalMonth = function(delta){ calMonth = shiftMonth(calMonth||currentMonthStr(), delta); render(); };
+window.setCalSelectedDate = function(dateStr){ calSelectedDate = dateStr; render(); };
+
+window.openDayEvents = function(dateStr){
+  const dayEvents = state.events.filter(e=>e.date===dateStr).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+  const rows = dayEvents.map(e=>`
+    <div class="cal-event-detail">
+      <div style="font-weight:700;">${e.time?`${escapeHtml(e.time)} · `:''}${escapeHtml(e.title)}</div>
+      ${e.description?`<div class="hint" style="margin-top:4px;">${escapeHtml(e.description)}</div>`:''}
+    </div>
+  `).join('') || `<div class="empty-state">No hay eventos este día.</div>`;
+  openDialog(formatDateShort(dateStr), rows, ()=>{}, {hideSave:true});
+};
+
+window.newEvent = function(dateStr){
+  const colorOptions = COLOR_PALETTE.map(c=>`<option value="${c.id}">${c.label}</option>`).join('');
+  openDialog('Nuevo evento', `
+    <div class="field"><label>Título</label><input id="f_evtitle" placeholder="Ej: Torneo, Presentación, Charla técnica"></div>
+    <div class="field"><label>Fecha</label><input id="f_evdate" type="date" value="${dateStr||''}"></div>
+    <div class="field"><label>Hora (opcional)</label><input id="f_evtime" type="time"></div>
+    <div class="field"><label>Descripción (opcional)</label><textarea id="f_evdesc" rows="3"></textarea></div>
+    <div class="field"><label>Color</label><select id="f_evcolor">${colorOptions}</select></div>
+  `, async () => {
+    const title = document.getElementById('f_evtitle').value.trim();
+    const date = document.getElementById('f_evdate').value;
+    if(!title){ alert('El título es obligatorio.'); return; }
+    if(!date){ alert('La fecha es obligatoria.'); return; }
+    const time = document.getElementById('f_evtime').value || null;
+    const description = document.getElementById('f_evdesc').value.trim() || null;
+    const color = document.getElementById('f_evcolor').value;
+    closeDialog(); showBusy('Guardando...');
+    try{
+      await addDoc(collection(db,'events'), {title, date, time, description, color});
+      calSelectedDate = date; calMonth = date.slice(0,7);
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
+window.editEvent = function(id){
+  const e = state.events.find(x=>x.id===id);
+  if(!e) return;
+  const colorOptions = COLOR_PALETTE.map(c=>`<option value="${c.id}" ${c.id===(e.color||'blue')?'selected':''}>${c.label}</option>`).join('');
+  openDialog('Editar evento', `
+    <div class="field"><label>Título</label><input id="f_evtitle" value="${escapeAttr(e.title)}"></div>
+    <div class="field"><label>Fecha</label><input id="f_evdate" type="date" value="${e.date}"></div>
+    <div class="field"><label>Hora (opcional)</label><input id="f_evtime" type="time" value="${e.time||''}"></div>
+    <div class="field"><label>Descripción (opcional)</label><textarea id="f_evdesc" rows="3">${escapeHtml(e.description||'')}</textarea></div>
+    <div class="field"><label>Color</label><select id="f_evcolor">${colorOptions}</select></div>
+  `, async () => {
+    const title = document.getElementById('f_evtitle').value.trim();
+    const date = document.getElementById('f_evdate').value;
+    if(!title){ alert('El título es obligatorio.'); return; }
+    if(!date){ alert('La fecha es obligatoria.'); return; }
+    const time = document.getElementById('f_evtime').value || null;
+    const description = document.getElementById('f_evdesc').value.trim() || null;
+    const color = document.getElementById('f_evcolor').value;
+    closeDialog(); showBusy('Guardando...');
+    try{
+      await updateDoc(doc(db,'events',id), {title, date, time, description, color});
+      calSelectedDate = date; calMonth = date.slice(0,7);
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
+window.deleteEvent = async function(id){
+  if(!confirm('¿Eliminar este evento?')) return;
+  showBusy('Eliminando...');
+  try{ await deleteDoc(doc(db,'events',id)); }catch(e){ alert('Error: '+e.message); }
   hideBusy();
 };
 
@@ -1560,6 +1772,10 @@ function renderAthleteProfile(athlete){
   const monthKey = new Date().toISOString().slice(0,7);
   const monthly = attendancePct(athlete.id, monthKey);
   const annual = attendancePct(athlete.id, monthKey.slice(0,4), true);
+  if(!calMonth) calMonth = currentMonthStr();
+  const calGrid = renderCalendarGrid(calMonth, {editable:false});
+  const upcoming = upcomingEvents(10);
+  const upcomingHtml = upcoming.map(e=>eventRowHtml(e,false)).join('') || `<div class="empty-state">No hay eventos próximos cargados.</div>`;
   const sections = fisicoGroupsOverview().map(g=>{
     const groupId = realGroupId(g.id);
     const tests = testsInGroupSorted(groupId).filter(t => state.testResults.some(r=>r.testId===t.id));
@@ -1577,6 +1793,20 @@ function renderAthleteProfile(athlete){
     <div class="grid-2" style="margin-bottom:6px;">
       <div class="stat-box"><div class="num">${monthly===null?'—':monthly+'%'}</div><div class="lbl">Asistencia este mes</div></div>
       <div class="stat-box"><div class="num">${annual===null?'—':annual+'%'}</div><div class="lbl">Asistencia este año</div></div>
+    </div>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;">
+        <div class="row">
+          <button class="btn small secondary" onclick="setCalMonth(-1)">←</button>
+          <h3 class="cal-nav-label">${formatMonthLabelLong(calMonth)}</h3>
+          <button class="btn small secondary" onclick="setCalMonth(1)">→</button>
+        </div>
+      </div>
+      ${calGrid}
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Próximos eventos</h3>
+      ${upcomingHtml}
     </div>
     ${sections || `<div class="panel"><div class="empty-state">Todavía no hay resultados de control físico cargados.</div></div>`}
   `;
