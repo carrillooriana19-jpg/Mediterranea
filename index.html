@@ -231,6 +231,11 @@
     .cal-cell{min-height:40px;padding:4px;}
     .cal-daylabel{font-size:9px;}
   }
+  .ath-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-bottom:20px;-webkit-overflow-scrolling:touch;}
+  .ath-tab{flex:0 0 auto;background:none;border:none;border-bottom:3px solid transparent;padding:10px 14px;font:inherit;font-weight:600;color:#7C8C8C;cursor:pointer;white-space:nowrap;}
+  .ath-tab:hover{color:var(--ink);}
+  .ath-tab.active{color:var(--teal);border-bottom-color:var(--teal);}
+  .today-badge{font-size:11px;font-weight:700;color:var(--teal);background:var(--teal-light);padding:2px 8px;border-radius:10px;}
   a.btn{text-decoration:none;display:inline-flex;align-items:center;}
   .res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;}
   .res-card{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--white);display:flex;flex-direction:column;}
@@ -584,6 +589,7 @@ function stopListeners(){
   unsubscribers.forEach(u=>u());
   unsubscribers = [];
   state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[], resources:[] };
+  athleteTab = 'inicio';
 }
 
 function startAdminListeners(){
@@ -661,6 +667,14 @@ const TABS = [
   {id:'fisico', label:'Control físico', icon:'◈'},
 ];
 let activeTab = 'inicio';
+let athleteTab = 'inicio';
+const ATHLETE_TABS = [
+  {id:'inicio', label:'Inicio'},
+  {id:'recursos', label:'Videos y resultados'},
+  {id:'calendario', label:'Calendario'},
+  {id:'fisico', label:'Control físico'},
+];
+window.setAthleteTab = function(id){ athleteTab = id; render(); window.scrollTo(0,0); };
 
 function renderNav(){
   document.getElementById('nav').innerHTML = TABS.map(t => `
@@ -983,7 +997,28 @@ let calMonth = null;
 let calSelectedDate = null;
 const MESES_LARGOS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
-function currentMonthStr(){ return new Date().toISOString().slice(0,7); }
+function localDateStr(d){
+  d = d || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function currentMonthStr(){ return localDateStr().slice(0,7); }
+function weekRange(){
+  const t = new Date();
+  const off = (t.getDay()+6)%7; // lunes = 0
+  const mon = new Date(t.getFullYear(), t.getMonth(), t.getDate()-off);
+  const sun = new Date(t.getFullYear(), t.getMonth(), t.getDate()-off+6);
+  return [localDateStr(mon), localDateStr(sun)];
+}
+const DIAS_LARGOS = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+function weekdayName(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  return DIAS_LARGOS[new Date(y,m-1,d).getDay()];
+}
+function weekEvents(){
+  const [a,b] = weekRange();
+  return state.events.filter(e=>e.date>=a && e.date<=b)
+    .sort((x,y)=> x.date===y.date ? (x.time||'').localeCompare(y.time||'') : x.date.localeCompare(y.date));
+}
 function shiftMonth(monthStr, delta){
   let [y,m] = monthStr.split('-').map(Number);
   m += delta;
@@ -1011,7 +1046,7 @@ function eventsInMonth(monthStr){
     .sort((a,b)=> a.date===b.date ? (a.time||'').localeCompare(b.time||'') : a.date.localeCompare(b.date));
 }
 function upcomingEvents(limit){
-  const today = new Date().toISOString().slice(0,10);
+  const today = localDateStr();
   return state.events.filter(e=>e.date>=today)
     .sort((a,b)=> a.date===b.date ? (a.time||'').localeCompare(b.time||'') : a.date.localeCompare(b.date))
     .slice(0, limit||10);
@@ -1020,7 +1055,7 @@ function renderCalendarGrid(monthStr, opts){
   opts = opts||{};
   const editable = !!opts.editable;
   const cells = monthCells(monthStr);
-  const todayStr = new Date().toISOString().slice(0,10);
+  const todayStr = localDateStr();
   const dayLabels = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
   const head = dayLabels.map(d=>`<div class="cal-daylabel">${d}</div>`).join('');
   const body = cells.map(dateStr=>{
@@ -1050,7 +1085,7 @@ function eventRowHtml(e, editable){
 
 function viewCalendario(){
   if(!calMonth) calMonth = currentMonthStr();
-  if(!calSelectedDate) calSelectedDate = new Date().toISOString().slice(0,10);
+  if(!calSelectedDate) calSelectedDate = localDateStr();
   const monthEvents = eventsInMonth(calMonth);
   const grid = renderCalendarGrid(calMonth, {editable:true});
   const selDayEvents = state.events.filter(e=>e.date===calSelectedDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
@@ -2018,34 +2053,43 @@ window.printReport = function(groupKey){
 /* ============================================================
    PERFIL DE ATLETA (solo lectura)
    ============================================================ */
-function renderAthleteProfile(athlete){
-  if(!athlete) return `<div class="panel"><div class="empty-state">Cargando tu perfil...</div></div>`;
-  const initial = athlete.name.trim().charAt(0).toUpperCase();
+function weekEventRowHtml(e){
+  const isToday = e.date===localDateStr();
+  return `<div class="test-row">
+    <span class="color-dot" style="background:${colorHex(e.color||'blue')};"></span>
+    <span class="test-name" style="text-transform:capitalize;">${weekdayName(e.date)} ${formatDateShort(e.date)}${e.time?` · ${escapeHtml(e.time)}`:''}</span>
+    <span>${escapeHtml(e.title)}</span>
+    ${isToday?`<span class="today-badge">Hoy</span>`:''}
+    ${e.description?`<span class="hint">${escapeHtml(e.description)}</span>`:''}
+  </div>`;
+}
+
+function athleteTabInicio(athlete){
   const monthKey = new Date().toISOString().slice(0,7);
   const monthly = attendancePct(athlete.id, monthKey);
   const annual = attendancePct(athlete.id, monthKey.slice(0,4), true);
-  if(!calMonth) calMonth = currentMonthStr();
-  const calGrid = renderCalendarGrid(calMonth, {editable:false});
-  const upcoming = upcomingEvents(10);
-  const upcomingHtml = upcoming.map(e=>eventRowHtml(e,false)).join('') || `<div class="empty-state">No hay eventos próximos cargados.</div>`;
-  const sections = fisicoGroupsOverview().map(g=>{
-    const groupId = realGroupId(g.id);
-    const tests = testsInGroupSorted(groupId).filter(t => state.testResults.some(r=>r.testId===t.id));
-    if(tests.length===0) return '';
-    return `<div class="panel"><h3 style="margin-top:0;">${escapeHtml(g.name)}</h3>${tests.map(t=>renderTestChart(athlete.id, t)).join('')}</div>`;
-  }).join('');
+  const wk = weekEvents();
+  const wkHtml = wk.length ? wk.map(weekEventRowHtml).join('') : `<div class="empty-state">No hay eventos esta semana.</div>`;
   return `
-    <div class="row" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-      <div class="athlete-profile-header">
-        <div class="athlete-avatar">${escapeHtml(initial)}</div>
-        <div><h2 class="page-title" style="margin:0;">${escapeHtml(athlete.name)}</h2><div class="hint">${escapeHtml(athlete.category||'')}</div></div>
-      </div>
-      <button class="btn secondary" onclick="logout()">Cerrar sesión</button>
-    </div>
     <div class="grid-2" style="margin-bottom:6px;">
       <div class="stat-box"><div class="num">${monthly===null?'—':monthly+'%'}</div><div class="lbl">Asistencia este mes</div></div>
       <div class="stat-box"><div class="num">${annual===null?'—':annual+'%'}</div><div class="lbl">Asistencia este año</div></div>
     </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Esta semana</h3>
+      ${wkHtml}
+    </div>
+  `;
+}
+
+function athleteTabRecursos(){
+  return resourcesPanelsHtml(false) || `<div class="panel"><div class="empty-state">Todavía no hay videos ni resultados cargados.</div></div>`;
+}
+
+function athleteTabCalendario(){
+  if(!calMonth) calMonth = currentMonthStr();
+  const upcomingHtml = upcomingEvents(10).map(e=>eventRowHtml(e,false)).join('') || `<div class="empty-state">No hay eventos próximos cargados.</div>`;
+  return `
     <div class="panel">
       <div class="row" style="justify-content:space-between;margin-bottom:14px;">
         <div class="row">
@@ -2054,14 +2098,44 @@ function renderAthleteProfile(athlete){
           <button class="btn small secondary" onclick="setCalMonth(1)">→</button>
         </div>
       </div>
-      ${calGrid}
+      ${renderCalendarGrid(calMonth, {editable:false})}
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">Próximos eventos</h3>
       ${upcomingHtml}
     </div>
-    ${resourcesPanelsHtml(false)}
-    ${sections || `<div class="panel"><div class="empty-state">Todavía no hay resultados de control físico cargados.</div></div>`}
+  `;
+}
+
+function athleteTabFisico(athlete){
+  const sections = fisicoGroupsOverview().map(g=>{
+    const groupId = realGroupId(g.id);
+    const tests = testsInGroupSorted(groupId).filter(t => state.testResults.some(r=>r.testId===t.id));
+    if(tests.length===0) return '';
+    return `<div class="panel"><h3 style="margin-top:0;">${escapeHtml(g.name)}</h3>${tests.map(t=>renderTestChart(athlete.id, t)).join('')}</div>`;
+  }).join('');
+  return sections || `<div class="panel"><div class="empty-state">Todavía no hay resultados de control físico cargados.</div></div>`;
+}
+
+function renderAthleteProfile(athlete){
+  if(!athlete) return `<div class="panel"><div class="empty-state">Cargando tu perfil...</div></div>`;
+  const initial = athlete.name.trim().charAt(0).toUpperCase();
+  let content = '';
+  if(athleteTab==='inicio') content = athleteTabInicio(athlete);
+  else if(athleteTab==='recursos') content = athleteTabRecursos();
+  else if(athleteTab==='calendario') content = athleteTabCalendario();
+  else if(athleteTab==='fisico') content = athleteTabFisico(athlete);
+  const tabsBar = ATHLETE_TABS.map(t=>`<button class="ath-tab ${t.id===athleteTab?'active':''}" onclick="setAthleteTab('${t.id}')">${t.label}</button>`).join('');
+  return `
+    <div class="row" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+      <div class="athlete-profile-header">
+        <div class="athlete-avatar">${escapeHtml(initial)}</div>
+        <div><h2 class="page-title" style="margin:0;">${escapeHtml(athlete.name)}</h2><div class="hint">${escapeHtml(athlete.category||'')}</div></div>
+      </div>
+      <button class="btn secondary" onclick="logout()">Cerrar sesión</button>
+    </div>
+    <div class="ath-tabs">${tabsBar}</div>
+    ${content}
   `;
 }
 
