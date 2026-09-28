@@ -231,6 +231,15 @@
     .cal-cell{min-height:40px;padding:4px;}
     .cal-daylabel{font-size:9px;}
   }
+  a.btn{text-decoration:none;display:inline-flex;align-items:center;}
+  .res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;}
+  .res-card{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--white);display:flex;flex-direction:column;}
+  .res-video{position:relative;width:100%;padding-top:56.25%;background:#000;}
+  .res-video iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;}
+  .res-img{display:block;width:100%;max-height:280px;object-fit:contain;background:#F3F6F6;cursor:zoom-in;}
+  .res-body{padding:14px;}
+  .res-title{font-weight:700;}
+  .res-desc{margin-top:6px;white-space:pre-line;}
   @media print{
     .rail,.no-print{display:none !important;}
     main{padding:0;max-width:100%;}
@@ -330,7 +339,7 @@ let currentRole = null; // 'admin' | 'athlete'
 let currentAthleteId = null;
 let unsubscribers = [];
 
-let state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[] };
+let state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[], resources:[] };
 
 function uid(){ return 'id_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
 
@@ -574,7 +583,7 @@ onAuthStateChanged(auth, async (user) => {
 function stopListeners(){
   unsubscribers.forEach(u=>u());
   unsubscribers = [];
-  state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[] };
+  state = { athletes:[], attendance:[], testGroups:[], testDefs:[], testResults:[], events:[], resources:[] };
 }
 
 function startAdminListeners(){
@@ -600,6 +609,10 @@ function startAdminListeners(){
   }));
   unsubscribers.push(onSnapshot(collection(db,'events'), snap=>{
     state.events = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
+  unsubscribers.push(onSnapshot(collection(db,'resources'), snap=>{
+    state.resources = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
 }
@@ -630,6 +643,10 @@ function startAthleteListeners(){
     state.events = snap.docs.map(d=>({id:d.id, ...d.data()}));
     render();
   }));
+  unsubscribers.push(onSnapshot(collection(db,'resources'), snap=>{
+    state.resources = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    render();
+  }));
 }
 
 /* ============================================================
@@ -640,6 +657,7 @@ const TABS = [
   {id:'atletas', label:'Atletas', icon:'●'},
   {id:'asistencia', label:'Asistencia', icon:'◐'},
   {id:'calendario', label:'Calendario', icon:'▦'},
+  {id:'recursos', label:'Videos y PDFs', icon:'▶'},
   {id:'fisico', label:'Control físico', icon:'◈'},
 ];
 let activeTab = 'inicio';
@@ -668,6 +686,7 @@ function render(){
   if(activeTab==='atletas') main.innerHTML = viewAtletas();
   if(activeTab==='asistencia') main.innerHTML = viewAsistencia();
   if(activeTab==='calendario') main.innerHTML = viewCalendario();
+  if(activeTab==='recursos') main.innerHTML = viewRecursos();
   if(activeTab==='fisico') main.innerHTML = viewFisico();
   afterRender();
 }
@@ -1133,6 +1152,239 @@ window.deleteEvent = async function(id){
   if(!confirm('¿Eliminar este evento?')) return;
   showBusy('Eliminando...');
   try{ await deleteDoc(doc(db,'events',id)); }catch(e){ alert('Error: '+e.message); }
+  hideBusy();
+};
+
+/* ============================================================
+   VIDEOS Y PDFs (RECURSOS)
+   ============================================================ */
+const MAX_PDF_BYTES = 8*1024*1024;
+const CHUNK_CHARS = 700000; // caracteres base64 por documento (~525 KB)
+
+function videoEmbedUrl(url){
+  if(!url) return null;
+  let m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/);
+  if(m) return `https://www.youtube.com/embed/${m[1]}`;
+  m = url.match(/vimeo\.com\/(?:.*\/)?(\d+)/);
+  if(m) return `https://player.vimeo.com/video/${m[1]}`;
+  return null;
+}
+function normalizeUrl(u){
+  u = (u||'').trim();
+  if(u && !/^https?:\/\//i.test(u)) u = 'https://'+u;
+  return u;
+}
+function sortedResources(kind){
+  return state.resources.filter(r=>r.kind===kind).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+}
+function formatSize(bytes){
+  return bytes>=1048576 ? (bytes/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(bytes/1024))+' KB';
+}
+function formatDateFull(d){ return d ? d.split('-').reverse().join('/') : ''; }
+function fileToBase64(file){
+  return new Promise((res,rej)=>{
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result.split(',')[1]);
+    fr.onerror = () => rej(new Error('No se pudo leer el archivo.'));
+    fr.readAsDataURL(file);
+  });
+}
+function imageFileToDataUrl(file){
+  return new Promise(resolve=>{
+    readAndResizeImage(file, 900, 0.7, d1=>{
+      if(d1.length<=800000) return resolve(d1);
+      readAndResizeImage(file, 600, 0.6, resolve);
+    });
+  });
+}
+async function deleteChunks(resourceId){
+  const snap = await getDocs(query(collection(db,'resourceChunks'), where('resourceId','==',resourceId)));
+  for(const d of snap.docs) await deleteDoc(d.ref);
+}
+
+function videoCardHtml(r, editable){
+  const embed = videoEmbedUrl(r.url);
+  return `<div class="res-card">
+    ${embed ? `<div class="res-video"><iframe src="${embed}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
+    ${r.image ? `<img class="res-img" src="${r.image}" alt="${escapeAttr(r.title)}" onclick="openImage('${r.id}')">` : ''}
+    <div class="res-body">
+      <div class="res-title">${escapeHtml(r.title)}</div>
+      ${r.description ? `<div class="hint res-desc">${escapeHtml(r.description)}</div>` : ''}
+      <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;">
+        <a class="btn small secondary" href="${escapeAttr(r.url)}" target="_blank" rel="noopener">${embed?'Abrir en otra pestaña':'Ver video'}</a>
+        ${editable ? `<button class="btn small secondary" onclick="editResource('${r.id}')">Editar</button><button class="btn small danger" onclick="deleteResource('${r.id}')">Eliminar</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+function pdfRowHtml(r, editable){
+  return `<div class="test-row">
+    <span class="test-name">${escapeHtml(r.title)}${r.date?` · ${formatDateFull(r.date)}`:''}</span>
+    <span class="hint">${r.fileSize?formatSize(r.fileSize):''}</span>
+    <button class="btn small" onclick="openPdf('${r.id}')">Ver PDF</button>
+    ${editable ? `<button class="btn small secondary" onclick="editResource('${r.id}')">Editar</button><button class="btn small danger" onclick="deleteResource('${r.id}')">Eliminar</button>` : ''}
+  </div>`;
+}
+function resourcesPanelsHtml(editable){
+  const videos = sortedResources('video');
+  const pdfs = sortedResources('pdf');
+  const addV = editable ? `<button class="btn" onclick="newVideo()">+ Agregar video</button>` : '';
+  const addP = editable ? `<button class="btn" onclick="newPdf()">+ Subir PDF</button>` : '';
+  if(!editable && !videos.length && !pdfs.length) return '';
+  return `
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+        <h3 style="margin:0;">Videos y figuras</h3>${addV}
+      </div>
+      ${videos.length ? `<div class="res-grid">${videos.map(v=>videoCardHtml(v,editable)).join('')}</div>` : `<div class="empty-state">Todavía no hay videos.</div>`}
+    </div>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+        <h3 style="margin:0;">Resultados de competencias</h3>${addP}
+      </div>
+      ${pdfs.length ? pdfs.map(p=>pdfRowHtml(p,editable)).join('') : `<div class="empty-state">Todavía no hay PDFs.</div>`}
+    </div>`;
+}
+function viewRecursos(){
+  return `
+    <h2 class="page-title">Videos y PDFs</h2>
+    <p class="page-sub">Compartí videos de figuras (con la foto de la descripción) y PDFs de resultados. Tus atletas los ven desde su perfil.</p>
+    ${resourcesPanelsHtml(true)}
+  `;
+}
+
+window.openImage = function(id){
+  const r = state.resources.find(x=>x.id===id);
+  if(!r || !r.image) return;
+  openDialog(r.title, `<img src="${r.image}" alt="" style="width:100%;height:auto;display:block;">`, ()=>{}, {hideSave:true, wide:true});
+};
+
+window.openPdf = async function(id){
+  const r = state.resources.find(x=>x.id===id);
+  if(!r) return;
+  showBusy('Cargando PDF...');
+  try{
+    const snap = await getDocs(query(collection(db,'resourceChunks'), where('resourceId','==',id)));
+    const parts = snap.docs.map(d=>d.data()).sort((a,b)=>a.index-b.index);
+    if(!parts.length || parts.length !== r.chunks) throw new Error('El archivo está incompleto. Hay que volver a subirlo.');
+    const bin = atob(parts.map(p=>p.data).join(''));
+    const bytes = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], {type:'application/pdf'}));
+    hideBusy();
+    openDialog(r.title, `
+      <iframe src="${url}" style="width:100%;height:65vh;border:1px solid var(--line);border-radius:6px;"></iframe>
+      <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
+        <a class="btn small" href="${url}" target="_blank" rel="noopener">Abrir en otra pestaña</a>
+        <a class="btn small secondary" href="${url}" download="${escapeAttr(r.fileName||'resultados.pdf')}">Descargar</a>
+      </div>`, ()=>{}, {hideSave:true, wide:true});
+  }catch(e){ hideBusy(); alert('Error: '+e.message); }
+};
+
+window.newVideo = function(){
+  openDialog('Nuevo video', `
+    <div class="field"><label>Título</label><input id="f_rtitle" placeholder="Ej: Nueva figura — Barracuda"></div>
+    <div class="field"><label>Enlace del video (YouTube, Vimeo, Drive...)</label><input id="f_rurl" placeholder="https://www.youtube.com/watch?v=..."></div>
+    <div class="field"><label>Descripción (opcional)</label><textarea id="f_rdesc" rows="4" placeholder="Qué se puntúa, puntos a cuidar..."></textarea></div>
+    <div class="field"><label>Foto con la descripción de la figura (opcional)</label><input id="f_rimg" type="file" accept="image/*"></div>
+  `, async () => {
+    const title = document.getElementById('f_rtitle').value.trim();
+    const url = normalizeUrl(document.getElementById('f_rurl').value);
+    const description = document.getElementById('f_rdesc').value.trim() || null;
+    const file = document.getElementById('f_rimg').files[0];
+    if(!title){ alert('El título es obligatorio.'); return; }
+    if(!url){ alert('El enlace del video es obligatorio.'); return; }
+    closeDialog(); showBusy('Guardando...');
+    try{
+      const image = file ? await imageFileToDataUrl(file) : null;
+      await addDoc(collection(db,'resources'), {kind:'video', title, url, description, image, createdAt:Date.now()});
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
+window.newPdf = function(){
+  openDialog('Subir PDF de resultados', `
+    <div class="field"><label>Título</label><input id="f_rtitle" placeholder="Ej: Resultados Campeonato Autonómico"></div>
+    <div class="field"><label>Fecha de la competencia (opcional)</label><input id="f_rdate" type="date"></div>
+    <div class="field"><label>Archivo PDF (máx. 8 MB)</label><input id="f_rfile" type="file" accept="application/pdf,.pdf"></div>
+  `, async () => {
+    const title = document.getElementById('f_rtitle').value.trim();
+    const date = document.getElementById('f_rdate').value || null;
+    const file = document.getElementById('f_rfile').files[0];
+    if(!title){ alert('El título es obligatorio.'); return; }
+    if(!file){ alert('Elegí un archivo PDF.'); return; }
+    if(!/\.pdf$/i.test(file.name) && file.type!=='application/pdf'){ alert('El archivo tiene que ser un PDF.'); return; }
+    if(file.size > MAX_PDF_BYTES){ alert('El PDF pesa '+formatSize(file.size)+'. El máximo es 8 MB; probá comprimiéndolo.'); return; }
+    closeDialog(); showBusy('Subiendo PDF...');
+    const ref = doc(collection(db,'resources'));
+    try{
+      const b64 = await fileToBase64(file);
+      const total = Math.ceil(b64.length/CHUNK_CHARS);
+      for(let i=0;i<total;i++){
+        showBusy(`Subiendo PDF... ${i+1}/${total}`);
+        await addDoc(collection(db,'resourceChunks'), {resourceId:ref.id, index:i, data:b64.slice(i*CHUNK_CHARS,(i+1)*CHUNK_CHARS)});
+      }
+      await setDoc(ref, {kind:'pdf', title, date, fileName:file.name, fileSize:file.size, chunks:total, createdAt:Date.now()});
+    }catch(e){
+      try{ await deleteChunks(ref.id); }catch(_){}
+      alert('Error: '+e.message);
+    }
+    hideBusy();
+  });
+};
+
+window.editResource = function(id){
+  const r = state.resources.find(x=>x.id===id);
+  if(!r) return;
+  if(r.kind==='pdf'){
+    openDialog('Editar PDF', `
+      <div class="field"><label>Título</label><input id="f_rtitle" value="${escapeAttr(r.title)}"></div>
+      <div class="field"><label>Fecha de la competencia (opcional)</label><input id="f_rdate" type="date" value="${r.date||''}"></div>
+    `, async () => {
+      const title = document.getElementById('f_rtitle').value.trim();
+      if(!title){ alert('El título es obligatorio.'); return; }
+      const date = document.getElementById('f_rdate').value || null;
+      closeDialog(); showBusy('Guardando...');
+      try{ await updateDoc(doc(db,'resources',id), {title, date}); }catch(e){ alert('Error: '+e.message); }
+      hideBusy();
+    });
+    return;
+  }
+  openDialog('Editar video', `
+    <div class="field"><label>Título</label><input id="f_rtitle" value="${escapeAttr(r.title)}"></div>
+    <div class="field"><label>Enlace del video</label><input id="f_rurl" value="${escapeAttr(r.url||'')}"></div>
+    <div class="field"><label>Descripción (opcional)</label><textarea id="f_rdesc" rows="4">${escapeHtml(r.description||'')}</textarea></div>
+    <div class="field"><label>${r.image?'Reemplazar foto (opcional)':'Foto con la descripción (opcional)'}</label><input id="f_rimg" type="file" accept="image/*"></div>
+    ${r.image?`<label style="display:flex;gap:8px;align-items:center;font-size:13px;"><input type="checkbox" id="f_rremoveimg"> Quitar la foto actual</label>`:''}
+  `, async () => {
+    const title = document.getElementById('f_rtitle').value.trim();
+    const url = normalizeUrl(document.getElementById('f_rurl').value);
+    const description = document.getElementById('f_rdesc').value.trim() || null;
+    const file = document.getElementById('f_rimg').files[0];
+    const removeImg = !!(document.getElementById('f_rremoveimg') && document.getElementById('f_rremoveimg').checked);
+    if(!title){ alert('El título es obligatorio.'); return; }
+    if(!url){ alert('El enlace del video es obligatorio.'); return; }
+    closeDialog(); showBusy('Guardando...');
+    try{
+      const data = {title, url, description};
+      if(file) data.image = await imageFileToDataUrl(file);
+      else if(removeImg) data.image = null;
+      await updateDoc(doc(db,'resources',id), data);
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
+window.deleteResource = async function(id){
+  const r = state.resources.find(x=>x.id===id);
+  if(!r) return;
+  if(!confirm('¿Eliminar "'+r.title+'"?')) return;
+  showBusy('Eliminando...');
+  try{
+    if(r.kind==='pdf') await deleteChunks(id);
+    await deleteDoc(doc(db,'resources',id));
+  }catch(e){ alert('Error: '+e.message); }
   hideBusy();
 };
 
@@ -1808,6 +2060,7 @@ function renderAthleteProfile(athlete){
       <h3 style="margin-top:0;">Próximos eventos</h3>
       ${upcomingHtml}
     </div>
+    ${resourcesPanelsHtml(false)}
     ${sections || `<div class="panel"><div class="empty-state">Todavía no hay resultados de control físico cargados.</div></div>`}
   `;
 }
