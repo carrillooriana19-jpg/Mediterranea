@@ -274,6 +274,9 @@
   .athlete-pick-card:hover{background:var(--teal-light);border-color:var(--teal);}
   .athlete-avatar{width:52px;height:52px;border-radius:50%;background:var(--navy);color:var(--white);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;margin:0 auto 8px;}
   .athlete-profile-header{display:flex;align-items:center;gap:16px;}
+  .athlete-avatar{overflow:hidden;}
+  .athlete-avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+  .athlete-avatar.sm{width:44px;height:44px;font-size:17px;margin:0;flex:0 0 auto;}
   .athlete-profile-header .athlete-avatar{width:60px;height:60px;font-size:24px;margin:0;}
   #busyOverlay{position:fixed;inset:0;background:rgba(11,43,60,.55);display:none;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;z-index:9999;}
 </style>
@@ -403,6 +406,32 @@ function readAndResizeImage(file, maxDim, quality, callback){
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function avatarFileToDataUrl(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer la foto.'));
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('No se pudo abrir la imagen.'));
+      img.onload = () => {
+        const size = 256;
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side)/2, sy = (img.height - side)/2;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        canvas.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function avatarHtml(a, extraClass){
+  const inner = a.photo ? `<img src="${a.photo}" alt="">` : escapeHtml((a.name||'?').trim().charAt(0).toUpperCase());
+  return `<div class="athlete-avatar ${extraClass||''}">${inner}</div>`;
 }
 
 /* ============ DIALOGO GENÉRICO ============ */
@@ -730,10 +759,13 @@ function randomPin(){ return String(Math.floor(100000 + Math.random()*900000)); 
 function viewAtletas(){
   const rows = state.athletes.map(a => `
     <div class="athlete-card">
-      <div>
+      <div class="row" style="gap:12px;">
+        ${avatarHtml(a,'sm')}
+        <div>
         <div class="athlete-name">${escapeHtml(a.name)}</div>
         <div class="athlete-cat">${escapeHtml(a.category||'Sin categoría')}${a.birthday?` · 🎂 ${formatDateShort(a.birthday)}`:''}${a.height?` · 📏 ${a.height} cm`:''}
           ${a.authUid ? ' · <span class="tag">Acceso creado</span>' : ' · <span class="tag" style="background:#F7E2DD;color:var(--red);">Sin acceso</span>'}
+        </div>
         </div>
       </div>
       <div class="row">
@@ -760,6 +792,7 @@ window.newAthlete = function(){
   const suggestedPin = randomPin();
   openDialog('Agregar atleta', `
     <div class="field"><label>Nombre</label><input id="f_name" placeholder="Nombre y apellido"></div>
+    <div class="field"><label>Foto de perfil (opcional)</label><input id="f_photo" type="file" accept="image/*"></div>
     <div class="field"><label>Categoría / Grupo</label><input id="f_cat" placeholder="Ej: Infantil, Juvenil, Equipo A"></div>
     <div class="field"><label>Fecha de nacimiento (opcional)</label><input id="f_bday" type="date"></div>
     <div class="field"><label>Estatura en cm (opcional)</label><input id="f_height" type="number" step="0.1"></div>
@@ -776,15 +809,17 @@ window.newAthlete = function(){
     const bday = document.getElementById('f_bday').value || null;
     const heightRaw = document.getElementById('f_height').value;
     const height = heightRaw!=='' ? parseFloat(heightRaw) : null;
+    const photoFile = document.getElementById('f_photo').files[0];
     closeDialog();
     showBusy('Creando acceso...');
     try{
+      const photo = photoFile ? await avatarFileToDataUrl(photoFile) : null;
       const newRef = doc(collection(db,'athletes'));
       const fakeEmail = `athlete-${newRef.id}@${ATHLETE_EMAIL_DOMAIN}`;
       const cred = await createUserWithEmailAndPassword(secondaryAuth, fakeEmail, pin);
       await signOut(secondaryAuth);
       await setDoc(newRef, {
-        name, category:cat, birthday:bday, height,
+        name, category:cat, birthday:bday, height, photo,
         authUid: cred.user.uid, authEmail: fakeEmail,
         createdAt: serverTimestamp()
       });
@@ -801,6 +836,10 @@ window.editAthlete = function(id){
   const a = state.athletes.find(x=>x.id===id);
   openDialog('Editar atleta', `
     <div class="field"><label>Nombre</label><input id="f_name" value="${escapeAttr(a.name)}"></div>
+    <div class="field"><label>Foto de perfil</label>
+      <div class="row" style="gap:12px;">${avatarHtml(a,'sm')}<input id="f_photo" type="file" accept="image/*"></div>
+      ${a.photo?`<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px;"><input type="checkbox" id="f_rmphoto"> Quitar la foto actual</label>`:''}
+    </div>
     <div class="field"><label>Categoría / Grupo</label><input id="f_cat" value="${escapeAttr(a.category||'')}"></div>
     <div class="field"><label>Fecha de nacimiento (opcional)</label><input id="f_bday" type="date" value="${escapeAttr(a.birthday||'')}"></div>
     <div class="field"><label>Estatura en cm (opcional)</label><input id="f_height" type="number" step="0.1" value="${a.height||''}"></div>
@@ -816,10 +855,16 @@ window.editAthlete = function(id){
     const bday = document.getElementById('f_bday').value || null;
     const heightRaw = document.getElementById('f_height').value;
     const height = heightRaw!=='' ? parseFloat(heightRaw) : null;
+    const photoFile = document.getElementById('f_photo').files[0];
+    const rmEl = document.getElementById('f_rmphoto');
+    const removePhoto = !!(rmEl && rmEl.checked);
     closeDialog();
     showBusy('Guardando...');
     try{
-      await updateDoc(doc(db,'athletes',id), {name, category:cat, birthday:bday, height});
+      const data = {name, category:cat, birthday:bday, height};
+      if(photoFile) data.photo = await avatarFileToDataUrl(photoFile);
+      else if(removePhoto) data.photo = null;
+      await updateDoc(doc(db,'athletes',id), data);
       await setDoc(doc(db,'athleteDirectory',id), {name, authEmail:a.authEmail||null}, {merge:true});
       hideBusy();
     }catch(e){ hideBusy(); alert('Error: '+e.message); }
@@ -2129,7 +2174,7 @@ function renderAthleteProfile(athlete){
   return `
     <div class="row" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <div class="athlete-profile-header">
-        <div class="athlete-avatar">${escapeHtml(initial)}</div>
+        ${avatarHtml(athlete)}
         <div><h2 class="page-title" style="margin:0;">${escapeHtml(athlete.name)}</h2><div class="hint">${escapeHtml(athlete.category||'')}</div></div>
       </div>
       <button class="btn secondary" onclick="logout()">Cerrar sesión</button>
