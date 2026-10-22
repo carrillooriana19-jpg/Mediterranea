@@ -288,6 +288,8 @@
   .athlete-avatar img{width:100%;height:100%;object-fit:cover;display:block;}
   .athlete-avatar.sm{width:44px;height:44px;font-size:17px;margin:0;flex:0 0 auto;}
   .athlete-profile-header .athlete-avatar{width:60px;height:60px;font-size:24px;margin:0;}
+  .avatar-edit-wrap{position:relative;flex:0 0 auto;}
+  .avatar-edit-btn{position:absolute;bottom:-2px;right:-2px;width:24px;height:24px;border-radius:50%;background:var(--teal);color:var(--white);border:2px solid var(--white);display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;padding:0;}
   #busyOverlay{position:fixed;inset:0;background:rgba(11,43,60,.55);display:none;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;z-index:9999;}
 </style>
 </head>
@@ -439,6 +441,25 @@ function avatarFileToDataUrl(file){
     reader.readAsDataURL(file);
   });
 }
+window.editMyPhoto = function(athleteId){
+  const a = state.athletes.find(x=>x.id===athleteId);
+  openDialog('Mi foto de perfil', `
+    <div class="row" style="gap:12px;align-items:center;margin-bottom:10px;">${avatarHtml(a||{},'sm')}<input id="f_myphoto" type="file" accept="image/*"></div>
+    ${a && a.photo ? `<label style="display:flex;gap:8px;align-items:center;font-size:13px;"><input type="checkbox" id="f_myphoto_rm"> Quitar mi foto actual</label>` : ''}
+  `, async () => {
+    const file = document.getElementById('f_myphoto').files[0];
+    const rmEl = document.getElementById('f_myphoto_rm');
+    const remove = !!(rmEl && rmEl.checked);
+    if(!file && !remove){ closeDialog(); return; }
+    closeDialog(); showBusy('Guardando...');
+    try{
+      const photo = file ? await avatarFileToDataUrl(file) : null;
+      await updateDoc(doc(db,'athletes',athleteId), {photo});
+    }catch(e){ alert('Error: '+e.message); }
+    hideBusy();
+  });
+};
+
 function avatarHtml(a, extraClass){
   const inner = a.photo ? `<img src="${a.photo}" alt="">` : escapeHtml((a.name||'?').trim().charAt(0).toUpperCase());
   return `<div class="athlete-avatar ${extraClass||''}">${inner}</div>`;
@@ -931,7 +952,8 @@ const ATTENDANCE_STATUSES = {
   tardanza: {label:'Llegó tarde',bg:'#FBF0DC', fg:'#8A611A'},
   cteib:    {label:'CTEIB',      bg:'#DCEFEF', fg:'#166E6E'}
 };
-const ATTENDANCE_COUNTS_AS_PRESENT = ['presente','cteib'];
+// Cuánto suma cada estado al porcentaje de ese día (1 = día completo)
+const ATTENDANCE_WEIGHT = {presente:1, cteib:1, tardanza:0.95, ausente:0};
 
 function uniqueDates(){ return [...new Set(state.attendance.map(r=>r.date))].sort(); }
 function uniqueMonths(){ return [...new Set(uniqueDates().map(d=>d.slice(0,7)))].sort(); }
@@ -995,7 +1017,7 @@ function viewAsistencia(){
     </div>
     <div class="panel">
       ${rows}
-      <div class="hint" style="margin-top:10px;">CTEIB cuenta como asistencia en el %. "Llegó tarde" no suma — avisame si preferís que sí cuente.</div>
+      <div class="hint" style="margin-top:10px;">CTEIB cuenta como asistencia completa. "Llegó tarde" cuenta como el 95% de ese día.</div>
     </div>
     <div class="panel">
       <div class="row" style="justify-content:space-between;margin-bottom:14px;">
@@ -1014,7 +1036,7 @@ function attendancePct(athleteId, period, isYear=false){
   let counted=0;
   dates.forEach(d=>{
     const rec = state.attendance.find(r=>r.athleteId===athleteId && r.date===d);
-    if(rec && ATTENDANCE_COUNTS_AS_PRESENT.includes(rec.status)) counted++;
+    if(rec) counted += (ATTENDANCE_WEIGHT[rec.status] || 0);
   });
   return Math.round((counted/dates.length)*100);
 }
@@ -2184,7 +2206,10 @@ function renderAthleteProfile(athlete){
   return `
     <div class="row" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <div class="athlete-profile-header">
-        ${avatarHtml(athlete)}
+        <div class="avatar-edit-wrap">
+          ${avatarHtml(athlete)}
+          <button class="avatar-edit-btn" onclick="editMyPhoto('${athlete.id}')" title="Cambiar mi foto">✎</button>
+        </div>
         <div><h2 class="page-title" style="margin:0;">${escapeHtml(athlete.name)}</h2><div class="hint">${escapeHtml(athlete.category||'')}</div></div>
       </div>
       <button class="btn secondary" onclick="logout()">Cerrar sesión</button>
