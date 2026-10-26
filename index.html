@@ -260,8 +260,13 @@
     main{padding:0;max-width:100%;}
     .app{grid-template-columns:1fr;}
   }
-  body.print-mode .app > main > *:not(#printArea){display:none !important;}
-  body.print-mode #printArea{display:block !important;}
+  #printArea{display:none;}
+  @media print{
+    body.print-mode > *:not(#printArea){display:none !important;}
+    body.print-mode #printArea{display:block !important;padding:0;margin:0;background:#fff;color:#000;}
+    body.print-mode #printArea table{page-break-inside:auto;}
+    body.print-mode #printArea tr{page-break-inside:avoid;}
+  }
 
   /* ---- Login / auth screen ---- */
   #authScreen{
@@ -311,6 +316,8 @@
   </div>
   <main id="main"></main>
 </div>
+
+<div id="printArea"></div>
 
 <div id="busyOverlay">Cargando...</div>
 
@@ -1549,7 +1556,6 @@ function renderFisicoGroupList(){
       </div>
       ${cards}
     </div>
-    <div id="printArea" style="display:none;"></div>
   `;
 }
 window.enterFisicoGroup = function(key){ fisicoActiveGroup=key; fisicoView='detail'; render(); };
@@ -1609,7 +1615,6 @@ function renderFisicoGroupDetail(){
       </div>
       <div id="fisicoCharts">${chartsHtml}</div>
     </div>
-    <div id="printArea" style="display:none;"></div>
   `;
 }
 
@@ -2091,6 +2096,21 @@ window.toggleAllCheckboxes = function(className){
   const allChecked = boxes.every(b=>b.checked);
   boxes.forEach(b=> b.checked = !allChecked);
 };
+
+/* ---- Impresión robusta: contenedor fuera de <main>, limpieza con afterprint ---- */
+function doPrint(html){
+  const area = document.getElementById('printArea');
+  area.innerHTML = html;
+  document.body.classList.add('print-mode');
+  const cleanup = () => {
+    area.innerHTML = '';
+    document.body.classList.remove('print-mode');
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  // pequeña espera para que el navegador pinte el contenido antes de abrir la vista previa
+  requestAnimationFrame(()=> setTimeout(()=>{ window.print(); }, 50));
+}
 window.printBlankSheet = function(scopeKeys, athleteIds){
   let keys = scopeKeys==null ? fisicoGroupsOverview().map(g=>g.id) : (Array.isArray(scopeKeys)?scopeKeys:[scopeKeys]);
   let sections = keys.map(key=>{
@@ -2109,22 +2129,15 @@ window.printBlankSheet = function(scopeKeys, athleteIds){
     const bodyRows = athletesSorted.map(a=>`<tr><td style="border:1px solid #333;padding:6px;font-weight:700;white-space:nowrap;">${escapeHtml(a.name)}</td>${sec.tests.map(()=>`<td style="border:1px solid #333;height:36px;"></td>`).join('')}</tr>`).join('');
     return `<div style="padding:20px 0;${idx<sections.length-1?'page-break-after:always;':''}"><h1 style="margin:0 0 4px;">Planilla de control físico</h1><h2 style="margin:0 0 10px;color:#5A6B6B;">${escapeHtml(sec.name)}</h2><div style="margin-bottom:14px;">Fecha: _____________________</div><table style="border-collapse:collapse;width:100%;"><thead><tr><th style="border:1px solid #333;padding:6px;">Atleta</th>${headCols}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
   }).join('');
-  const area = document.getElementById('printArea');
-  area.innerHTML = sectionsHtml; area.style.display='block';
-  document.body.classList.add('print-mode'); window.print();
-  setTimeout(()=>{ area.style.display='none'; document.body.classList.remove('print-mode'); }, 500);
+  doPrint(sectionsHtml);
 };
 window.printReport = function(groupKey){
   const athlete = state.athletes.find(a=>a.id===fisicoSelectedAthlete);
-  const area = document.getElementById('printArea');
   const groupId = realGroupId(groupKey);
   const groupName = groupKey===UNGROUPED_KEY ? 'Sin agrupar' : ((state.testGroups.find(g=>g.id===groupId)||{}).name || '');
   const tests = testsInGroupSorted(groupId);
   const charts = tests.map(t=>renderTestChart(fisicoSelectedAthlete, t)).join('');
-  area.innerHTML = `<div style="padding:20px;"><h1 style="margin:0;">Reporte de control físico — ${escapeHtml(groupName)}</h1><h2 style="margin:4px 0 20px;color:#5A6B6B;">${escapeHtml(athlete.name)} · ${new Date().toLocaleDateString('es-AR')}</h2>${charts}</div>`;
-  area.style.display='block';
-  document.body.classList.add('print-mode'); window.print();
-  setTimeout(()=>{ area.style.display='none'; document.body.classList.remove('print-mode'); }, 500);
+  doPrint(`<div style="padding:20px;"><h1 style="margin:0;">Reporte de control físico — ${escapeHtml(groupName)}</h1><h2 style="margin:4px 0 20px;color:#5A6B6B;">${escapeHtml(athlete.name)} · ${new Date().toLocaleDateString('es-AR')}</h2>${charts}</div>`);
 };
 
 /* ============================================================
