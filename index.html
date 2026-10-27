@@ -255,6 +255,20 @@
   .res-body{padding:14px;}
   .res-title{font-weight:700;}
   .res-desc{margin-top:6px;white-space:pre-line;}
+
+  .ar-card{border:1px solid var(--line);border-left-width:6px;border-radius:var(--radius);padding:16px 18px;margin-bottom:16px;background:var(--white);}
+  .ar-card.ar-up{border-left-color:var(--green);background:#F2FBF5;}
+  .ar-card.ar-keep{border-left-color:#E0A526;background:#FFFAEF;}
+  .ar-card.ar-neutral{border-left-color:#9DB0B0;}
+  .ar-name{font-weight:700;font-size:15px;}
+  .ar-big{font-size:42px;font-weight:800;line-height:1.1;margin-top:6px;}
+  .ar-unit{font-size:18px;font-weight:600;color:#5A6B6B;}
+  .ar-date{font-size:12px;color:#7C8C8C;margin-bottom:8px;}
+  .ar-msg{font-size:16px;font-weight:700;}
+  .ar-diff,.ar-best{font-size:13.5px;color:#4A5B5B;margin-top:3px;}
+  .ar-more{margin-top:12px;}
+  .ar-more summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--navy);}
+  .ar-more[open] summary{margin-bottom:10px;}
   @media print{
     .rail,.no-print{display:none !important;}
     main{padding:0;max-width:100%;}
@@ -2197,12 +2211,44 @@ function athleteTabCalendario(){
   `;
 }
 
+
+/* ---- Vista simple para las atletas: resultado grande + mensaje claro + gráfico opcional ---- */
+function athleteResultCard(athleteId, t){
+  const full = renderTestChart(athleteId, t);
+  const pts = state.testResults.filter(r=>r.athleteId===athleteId && r.testId===t.id && typeof r.value==='number')
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  // Solo tests numéricos simples tienen tarjeta; el resto mantiene su vista original
+  if(t.type==='passfail' || t.type==='scoretime' || pts.length===0) return full;
+  const unit = escapeHtml(t.unit||'');
+  const last = pts[pts.length-1], prev = pts.length>1 ? pts[pts.length-2] : null;
+  const better = (a,b)=> t.higherIsBetter ? a>b : a<b;
+  const bestVal = pts.reduce((b,p)=> better(p.value,b)?p.value:b, pts[0].value);
+  const isBest = last.value===bestVal && pts.length>1;
+  let msg, cls;
+  if(!prev){ msg='¡Primer registro! Desde acá vamos a ver tu progreso 🌱'; cls='ar-neutral'; }
+  else if(last.value===prev.value){ msg='Igual que la vez anterior 👍'; cls='ar-neutral'; }
+  else if(better(last.value, prev.value)){
+    msg = isBest ? '¡Nueva mejor marca! 🏆' : '¡Mejoraste! 🎉'; cls='ar-up';
+  } else { msg='Un poquito más abajo esta vez. ¡Seguimos practicando! 💪'; cls='ar-keep'; }
+  const diff = prev ? Math.abs(last.value-prev.value) : 0;
+  const diffTxt = prev && diff!==0 ? `<div class="ar-diff">${better(last.value,prev.value)?'+':'−'}${diff.toFixed(2).replace(/\.?0+$/,'')} ${unit} respecto a la vez anterior</div>` : '';
+  const bestTxt = pts.length>1 ? `<div class="ar-best">Tu mejor marca: <strong>${bestVal} ${unit}</strong></div>` : '';
+  const dot = `<span class="color-dot" style="background:${colorHex(t.color)};display:inline-block;margin-right:6px;"></span>`;
+  return `<div class="ar-card ${cls}">
+    <div class="ar-name">${dot}${escapeHtml(t.name)} <span class="tag">${t.location==='agua'?'Agua':'Seco'}</span></div>
+    <div class="ar-big">${last.value}<span class="ar-unit"> ${unit}</span></div>
+    <div class="ar-date">${typeof formatDateShort==='function'?formatDateShort(last.date):last.date}</div>
+    <div class="ar-msg">${msg}</div>${diffTxt}${bestTxt}
+    <details class="ar-more"><summary>Ver cómo fui evolucionando</summary>${full}</details>
+  </div>`;
+}
+
 function athleteTabFisico(athlete){
   const sections = fisicoGroupsOverview().map(g=>{
     const groupId = realGroupId(g.id);
     const tests = testsInGroupSorted(groupId).filter(t => state.testResults.some(r=>r.testId===t.id));
     if(tests.length===0) return '';
-    return `<div class="panel"><h3 style="margin-top:0;">${escapeHtml(g.name)}</h3>${tests.map(t=>renderTestChart(athlete.id, t)).join('')}</div>`;
+    return `<div class="panel"><h3 style="margin-top:0;">${escapeHtml(g.name)}</h3>${tests.map(t=>athleteResultCard(athlete.id, t)).join('')}</div>`;
   }).join('');
   return sections || `<div class="panel"><div class="empty-state">Todavía no hay resultados de control físico cargados.</div></div>`;
 }
