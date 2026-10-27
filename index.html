@@ -2192,7 +2192,7 @@ function athleteTabRecursos(){
 
 function athleteTabCalendario(){
   if(!calMonth) calMonth = currentMonthStr();
-  const upcomingHtml = upcomingEvents(10).map(e=>eventRowHtml(e,false)).join('') || `<div class="empty-state">No hay eventos próximos cargados.</div>`;
+  const upcomingHtml = eventsInMonth(calMonth).map(e=>eventRowHtml(e,false)).join('') || `<div class="empty-state">No hay eventos en este mes.</div>`;
   return `
     <div class="panel">
       <div class="row" style="justify-content:space-between;margin-bottom:14px;">
@@ -2205,7 +2205,7 @@ function athleteTabCalendario(){
       ${renderCalendarGrid(calMonth, {editable:false})}
     </div>
     <div class="panel">
-      <h3 style="margin-top:0;">Próximos eventos</h3>
+      <h3 style="margin-top:0;">Eventos de ${formatMonthLabelLong(calMonth)}</h3>
       ${upcomingHtml}
     </div>
   `;
